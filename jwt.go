@@ -9,6 +9,11 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/mholt/caddy/caddyhttp/httpserver"
+	"bufio"
+	"encoding/pem"
+	"crypto/x509"
+	"crypto/rsa"
+	"errors"
 )
 
 func (h JWTAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) (int, error) {
@@ -124,16 +129,37 @@ func ValidateToken(uToken string) (*jwt.Token, error) {
 	if len(uToken) == 0 {
 		return nil, fmt.Errorf("Token length is zero")
 	}
+	token, err := jwt.Parse(uToken, func(token *jwt.Token) (interface{}, error) {
+		keyFilePath := os.Getenv("CAPTIVE_JWT_PUBLIC_KEY_PATH")
+		if len(keyFilePath) > 0{
+			publicKeyFile, err := os.Open(keyFilePath)
+			if err != nil {
+				return nil,err
+			}
+			pemfileinfo, _ := publicKeyFile.Stat()
+			var size int64 = pemfileinfo.Size()
+			pembytes := make([]byte, size)
 
-	token, err := jwt.Parse(uToken, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected signing method: %v", t.Header["alg"])
+			buffer := bufio.NewReader(publicKeyFile)
+			_, err = buffer.Read(pembytes)
+
+			data, _ := pem.Decode([]byte(pembytes))
+
+			defer publicKeyFile.Close()
+
+			publicKeyImported, err := x509.ParsePKIXPublicKey(data.Bytes)
+
+			if err != nil {
+				return nil, err
+			}
+			rsaPub, ok := publicKeyImported.(*rsa.PublicKey)
+			if !ok {
+				return nil, err
+			}
+			return rsaPub , nil
+		}else {
+			return nil, errors.New("environment variable CAPTIVE_JWT_PUBLIC_KEY_PATH has not been set")
 		}
-		secret, err := lookupSecret()
-		if err != nil {
-			return nil, err
-		}
-		return secret, nil
 	})
 
 	if token.Valid && err == nil {
